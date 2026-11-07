@@ -1,0 +1,16 @@
+{
+  "name": "spellbook",
+  "owner": { "name": "Davide Maggi" },
+  "metadata": {
+    "description": "Davide Maggi's book of agent skills. Each plugin contains a single skill."
+  },
+  "plugins": [
+    {
+      "name": "transcribe",
+      "source": "./skills/transcribe",
+      "description": "Local video/audio transcription with faster-whisper: raw text, SRT subtitles and a cleaned-up Markdown transcript.",
+      "category": "productivity",
+      "tags": ["transcription", "whisper", "subtitles"]
+    }
+  ]
+}
