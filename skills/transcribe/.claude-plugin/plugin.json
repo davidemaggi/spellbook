@@ -1,6 +1,6 @@
 {
   "name": "transcribe",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Local video/audio transcription with faster-whisper: raw text, SRT subtitles and a cleaned-up Markdown transcript.",
   "author": { "name": "Davide Maggi" },
   "homepage": "https://github.com/davidemaggi/spellbook/tree/main/skills/transcribe",

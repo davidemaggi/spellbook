@@ -1,12 +1,12 @@
 ---
 name: transcribe
-description: Transcribe video or audio files locally (faster-whisper on an NVIDIA GPU, CPU fallback) into a raw transcript, SRT subtitles and a cleaned-up Markdown version. Use when the user asks to transcribe, caption or get the text of a video/audio file or a folder of recordings.
+description: Transcribe video or audio files locally with faster-whisper on CPU or NVIDIA GPU into a raw transcript, SRT subtitles and a cleaned-up Markdown version. Use when the user asks to transcribe, caption or get the text of a video/audio file or a folder of recordings.
 license: MIT
-compatibility: Requires Python 3.10-3.14 and internet access on first run to download dependencies and the model. An NVIDIA GPU (CUDA 12) is recommended.
+compatibility: Requires Python 3.10-3.14, a compatible CPU and binary dependency wheels for the OS/architecture, and internet access for initial dependency and model downloads. NVIDIA CUDA 12 acceleration is optional; Apple GPUs are not used.
 argument-hint: <file-or-folder> [more paths] [-l <lang>] [-r] [--skip-existing]
 metadata:
   author: Davide Maggi
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Transcribe
@@ -22,9 +22,12 @@ python "<skill-dir>/scripts/run.py" <paths> [options]
 ```
 
 - On macOS/Linux use `python3` if `python` is missing. On Windows, `py` works too.
-- The first run creates a private virtual environment and downloads about 1 GB of dependencies plus the Whisper model (about 1.6 GB). Later runs start in seconds.
+- The first run creates a private virtual environment and installs CPU dependencies. CUDA libraries are added only if NVIDIA hardware is detected or `--device cuda` is requested. The default model downloads about 1.6 GB; dependencies and downloaded models are reused on later runs.
 - Allow a long timeout (10 minutes or more), or run the command in the background and wait for it to finish. Expect roughly 1 minute of processing for 10 minutes of audio on a mid-range GPU, and much longer on CPU.
-- Options: `-l <code>` forces the language (default: auto-detect), `-r` scans subfolders, `--skip-existing` skips files already transcribed, `--device cpu` forces CPU. `--help` lists all of them.
+- Options: `-l <code>` forces the language (default: auto-detect), `-r` scans subfolders, `--skip-existing` skips files already transcribed, `--device cpu` forces CPU. For a faster, smaller CPU model, use `--model small` when the user accepts the accuracy tradeoff. The default remains `large-v3-turbo`. `--help` works without installing dependencies.
+- Automatic device selection can retry CUDA failures once on CPU, using a supported CPU precision. Explicit `--device cuda` fails if CUDA cannot run. On macOS, use CPU; this backend does not use the Apple GPU.
+- If input files share output names (for example `talk.mp3` and `talk.mp4`), the script stops before transcription. Resolve this by renaming an input or moving it to a separate folder with the user's agreement.
+- If `--skip-existing` skips every input, this is a successful no-op. There are no new raw transcripts to clean up.
 - If the script fails, show the error to the user and stop. Do not continue to step 2.
 
 For each media file `<name>.<ext>`, the script writes `<name>_raw.txt` and `<name>.srt` next to it and prints both paths on lines starting with `->`. Collect every `_raw.txt` reported in this run.

@@ -69,27 +69,38 @@ def srt_time(t: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+def is_cuda_error(error: Exception) -> bool:
+    return isinstance(error, RuntimeError) and any(
+        word in str(error).lower() for word in ("cuda", "cublas", "cudnn", "out of memory"))
+
+
 def load_model(name: str, device: str, compute_type: str | None):
+    import ctranslate2
     from faster_whisper import WhisperModel
 
+    automatic = device == "auto"
     if device == "auto":
-        import ctranslate2
+        try:
+            device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+        except RuntimeError as e:
+            print(f"[warn] CUDA detection failed ({e}); using CPU.", file=sys.stderr)
+            device = "cpu"
 
-        device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
-
-    def ct(dev: str) -> str:
-        # int8_float16 fits large-v3-turbo comfortably in 4 GB of VRAM.
-        return compute_type or ("int8_float16" if dev == "cuda" else "int8")
-
-    print(f"Loading model {name} on {device} ({ct(device)})...", flush=True)
     try:
-        return WhisperModel(name, device=device, compute_type=ct(device))
+        supported = ctranslate2.get_supported_compute_types(device)
+        if compute_type and compute_type not in supported | {"auto", "default"}:
+            raise ValueError(f"Compute type {compute_type} is not supported on {device}. "
+                             f"Supported: {', '.join(sorted(supported))}.")
+        preferred = "int8_float16" if device == "cuda" else "int8"
+        precision = compute_type or (preferred if preferred in supported else "float32")
+        print(f"Loading model {name} on {device} ({precision})...", flush=True)
+        return WhisperModel(name, device=device, compute_type=precision)
     except Exception as e:
-        if device != "cuda":
+        if not automatic or device != "cuda" or not is_cuda_error(e):
             raise
         print(f"[warn] CUDA unavailable ({e}); falling back to CPU, this will be slow.",
               file=sys.stderr)
-        return WhisperModel(name, device="cpu", compute_type=ct("cpu"))
+        return load_model(name, "cpu", None)
 
 
 def transcribe_one(model, media: Path, language: str | None, beam_size: int,
@@ -131,7 +142,8 @@ def transcribe_one(model, media: Path, language: str | None, beam_size: int,
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Transcribe video/audio files locally with faster-whisper.")
-    ap.add_argument("inputs", nargs="+", help="media files and/or folders")
+    ap.add_argument("inputs", nargs="*", help="media files and/or folders")
+    ap.add_argument("--setup", action="store_true", help="prepare dependencies without downloading a model")
     ap.add_argument("-l", "--language", default=None,
                     help="language code (e.g. en, it). Default: auto-detect")
     ap.add_argument("-r", "--recursive", action="store_true", help="also scan subfolders")
@@ -142,7 +154,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--compute-type", default=None,
                     help="default: int8_float16 on CUDA, int8 on CPU")
     ap.add_argument("--beam-size", type=int, default=5)
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    if not args.inputs and not args.setup:
+        ap.error("provide at least one media file or folder, or use --setup")
+    if args.beam_size < 1:
+        ap.error("--beam-size must be at least 1")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -153,22 +170,50 @@ def main(argv: list[str] | None = None) -> int:
             pass
 
     args = parse_args(argv)
+    if args.setup:
+        print("Use scripts/run.py --setup to prepare dependencies.", file=sys.stderr)
+        return 1
     media = collect_media(args.inputs, args.recursive)
-    if args.skip_existing:
-        media = [m for m in media if not all(p.exists() for p in output_paths(m))]
     if not media:
         print("Nothing to transcribe.", file=sys.stderr)
         return 1
 
+    outputs: dict[str, Path] = {}
+    for m in media:
+        for output in output_paths(m):
+            key = str(output).casefold()
+            if key in outputs:
+                print(f"[error] Output collision: {outputs[key]} and {m} both write {output}. "
+                      "Rename one input or place it in another folder.", file=sys.stderr)
+                return 1
+            outputs[key] = m
+    if args.skip_existing:
+        media = [m for m in media if not all(p.is_file() for p in output_paths(m))]
+        if not media:
+            print("All files already transcribed; nothing to do.")
+            return 0
+
     add_windows_cuda_dlls()
-    model = load_model(args.model, args.device, args.compute_type)
+    try:
+        model = load_model(args.model, args.device, args.compute_type)
+    except Exception as e:
+        print(f"[error] Could not load model: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
     show_progress = sys.stdout.isatty()
 
     failures = 0
     for n, m in enumerate(media, start=1):
         print(f"[{n}/{len(media)}] {m}", flush=True)
         try:
-            transcribe_one(model, m, args.language, args.beam_size, show_progress)
+            try:
+                transcribe_one(model, m, args.language, args.beam_size, show_progress)
+            except Exception as e:
+                # CUDA libraries can fail only when the lazy segment iterator is consumed.
+                if args.device != "auto" or model.model.device != "cuda" or not is_cuda_error(e):
+                    raise
+                print(f"[warn] CUDA decoding failed ({e}); retrying on CPU.", file=sys.stderr)
+                model = load_model(args.model, "cpu", None)
+                transcribe_one(model, m, args.language, args.beam_size, show_progress)
         except Exception as e:  # keep going with the remaining files
             failures += 1
             print(f"    [error] {type(e).__name__}: {e}", file=sys.stderr)

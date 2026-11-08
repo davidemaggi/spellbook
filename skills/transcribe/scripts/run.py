@@ -23,6 +23,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REQUIREMENTS = HERE.parent / "requirements.txt"
+CUDA_REQUIREMENTS = HERE.parent / "requirements-cuda.txt"
 SUPPORTED = [(3, 14), (3, 13), (3, 12), (3, 11), (3, 10)]  # limited by ctranslate2/PyAV wheels
 
 
@@ -77,15 +78,37 @@ def find_python() -> list[str]:
         "(3.15+ has no ctranslate2/PyAV wheels yet) or set TRANSCRIBE_PYTHON.")
 
 
-def requirements_hash() -> str:
-    return hashlib.sha256(REQUIREMENTS.read_bytes()).hexdigest()
+def cuda_requested(device: str) -> bool:
+    if device == "cpu":
+        return False
+    if sys.platform == "darwin":
+        if device == "cuda":
+            raise ValueError("CUDA is not supported on macOS. Use --device cpu.")
+        return False
+    if device == "cuda":
+        return True
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10)
+        return result.returncode == 0 and bool(result.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
-def ensure_venv() -> Path:
+def requirements_hash(use_cuda: bool = False) -> str:
+    contents = REQUIREMENTS.read_bytes()
+    if use_cuda:
+        contents += b"\0cuda\0" + CUDA_REQUIREMENTS.read_bytes()
+    return hashlib.sha256(contents).hexdigest()
+
+
+def ensure_venv(use_cuda: bool = False) -> Path:
     venv = venv_dir()
     py = venv_python(venv)
     stamp = venv / ".requirements.sha256"
-    if py.exists() and stamp.exists() and stamp.read_text().strip() == requirements_hash():
+    digest = requirements_hash(use_cuda)
+    if py.exists() and stamp.exists() and stamp.read_text().strip() == digest:
         return py
 
     if not py.exists():
@@ -93,11 +116,12 @@ def ensure_venv() -> Path:
         log(f"creating virtual environment in {venv} (one-time setup)...")
         subprocess.run(base + ["-m", "venv", str(venv)], check=True)
 
-    log("installing dependencies (about 1 GB with CUDA libraries, one-time)...")
+    log("installing dependencies" + (" including CUDA libraries" if use_cuda else " for CPU") + "...")
     pip = [str(py), "-m", "pip", "install", "--disable-pip-version-check"]
     subprocess.run(pip + ["--upgrade", "pip", "-q"], check=True)
-    subprocess.run(pip + ["-r", str(REQUIREMENTS), "--only-binary=av,ctranslate2"], check=True)
-    stamp.write_text(requirements_hash())
+    requirements = CUDA_REQUIREMENTS if use_cuda else REQUIREMENTS
+    subprocess.run(pip + ["-r", str(requirements), "--only-binary=:all:"], check=True)
+    stamp.write_text(digest)
     return py
 
 
@@ -116,11 +140,17 @@ def cuda_env(py: Path) -> dict[str, str]:
     return env
 
 
-def main() -> int:
-    args = sys.argv[1:]
-    setup_only = "--setup" in args
-    py = ensure_venv()
-    if setup_only:
+def main(argv: list[str] | None = None) -> int:
+    from transcribe import parse_args
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    options = parse_args(args)
+    try:
+        py = ensure_venv(cuda_requested(options.device))
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        log(f"setup failed: {e}. Check network access, disk space and Python compatibility.")
+        return 1
+    if options.setup:
         log(f"environment ready: {py}")
         log(json.dumps({"venv": str(venv_dir())}))
         return 0

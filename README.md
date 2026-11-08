@@ -34,7 +34,7 @@ Pick the spells and the agents you want from the interactive menu, and that's it
 <!-- spells:start -->
 | Spell | What it does |
 | --- | --- |
-| [transcribe](skills/transcribe) | 🎙️ Transcribe video/audio **locally** on your GPU with faster-whisper: raw text, SRT subtitles and a polished Markdown transcript. Nothing leaves your machine. |
+| [transcribe](skills/transcribe) | 🎙️ Transcribe video/audio **locally** on CPU or NVIDIA GPU with faster-whisper: raw text, SRT subtitles and a polished Markdown transcript. Audio stays on your machine. |
 <!-- spells:end -->
 
 ## 🪄 Why spellbook?

@@ -1,0 +1,4 @@
+-r requirements.txt
+# Only installed when NVIDIA hardware is detected or --device cuda is requested.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12>=9,<10

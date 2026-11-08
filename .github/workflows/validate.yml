@@ -6,7 +6,11 @@ on:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -14,3 +18,7 @@ jobs:
           python-version: "3.12"
       - name: Check skills
         run: python tools/validate.py
+      - name: Regression tests
+        run: python -m unittest discover -s tests
+      - name: CPU transcription smoke test
+        run: python tests/smoke_transcribe.py
